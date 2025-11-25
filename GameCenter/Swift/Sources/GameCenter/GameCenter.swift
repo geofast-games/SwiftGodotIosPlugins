@@ -20,6 +20,7 @@ import SwiftGodot
         GameCenterAchievementDescription.self,
         GameCenterPlayer.self,
         GameCenterPlayerLocal.self,
+        GameCenterLeaderboardEntry.self,
     ]
 )
 
@@ -70,12 +71,8 @@ class GameCenter: Object {
     /// @Signal
     /// Error reporting the achievements
     @Signal var achievementsDescriptionFail: SignalWithArguments<Int, String>
-    /// @Signal
-    /// Score(s) have been successfully reported
-    @Signal var leaderboardScoreSuccess: SimpleSignal
-    /// @Signal
-    /// Error reporting the score
-    @Signal var leaderboardScoreFail: SignalWithArguments<Int, String>
+
+    // MARK: Leaderboards
     /// @Signal
     /// Leaderboard has been shown
     @Signal var leaderboardSuccess: SimpleSignal
@@ -85,7 +82,26 @@ class GameCenter: Object {
     /// @Signal
     /// Error showing the leaderboard
     @Signal var leaderboardFail: SignalWithArguments<Int, String>
-
+    /// @Signal
+    /// Score(s) have been successfully reported - includes leaderboard ID
+    @Signal var leaderboardScoreSuccess: SignalWithArguments<String>
+    /// @Signal
+    /// Error reporting the score - includes leaderboard ID
+    @Signal var leaderboardScoreFail: SignalWithArguments<Int, String, String>
+    /// @Signal
+    /// Leaderboard entries have been successfully loaded - includes leaderboard ID
+    @Signal var leaderboardEntriesLoadSuccess: SignalWithArguments<ObjectCollection<GameCenterLeaderboardEntry>, Int, String>
+    /// @Signal
+    /// Error loading leaderboard entries - includes leaderboard ID
+    @Signal var leaderboardEntriesLoadFail: SignalWithArguments<Int, String, String>
+    /// @Signal
+    /// Player's score and rank have been successfully loaded - includes leaderboard ID
+    @Signal var leaderboardPlayerScoreLoadSuccess: SignalWithArguments<GameCenterLeaderboardEntry, String>
+    /// @Signal
+    /// Error loading player's score - includes leaderboard ID
+    @Signal var leaderboardPlayerScoreLoadFail: SignalWithArguments<Int, String, String>
+    
+    
     #if canImport(UIKit)
         var viewController: GameCenterViewController =
             GameCenterViewController()
@@ -252,4 +268,56 @@ class GameCenter: Object {
     func showLeaderboard(leaderboardID: String) {
         showLeaderboardInternal(leaderboardID: leaderboardID)
     }
-}
+    
+    /// @Callable
+    ///
+    /// Load entries from a leaderboard
+    ///
+    /// - Parameters:
+    ///     - leaderboardID: The identifier for the leaderboard
+    ///     - playerScope: "global" or "friendsOnly"
+    ///     - timeScope: "allTime", "week", or "today"
+    ///     - rankMin: Starting rank to load (1 = first place)
+    ///     - rankMax: Ending rank to load
+    ///
+    /// - Signals:
+    ///     - leaderboard_entries_load_success: entries and total player count
+    ///     - leaderboard_entries_load_fail: error message
+    @Callable
+    func loadLeaderboardEntries(
+        leaderboardID: String,
+        playerScope: String,
+        timeScope: String,
+        rankMin: Int,
+        rankMax: Int
+    ) {
+        loadLeaderboardEntriesInternal(
+            leaderboardID: leaderboardID,
+            playerScope: playerScope,
+            timeScope: timeScope,
+            rankMin: rankMin,
+            rankMax: rankMax
+        )
+    }
+
+    /// @Callable
+    ///
+    /// Load the local player's score and rank for a leaderboard
+    ///
+    /// - Parameters:
+    ///     - leaderboardID: The identifier for the leaderboard
+    ///     - timeScope: "allTime", "week", or "today"
+    ///
+    /// - Signals:
+    ///     - leaderboard_player_score_load_success: player's entry
+    ///     - leaderboard_player_score_load_fail: error message
+    @Callable
+    func loadPlayerScore(
+        leaderboardID: String,
+        timeScope: String
+    ) {
+        loadPlayerScoreInternal(
+            leaderboardID: leaderboardID,
+            timeScope: timeScope
+        )
+    }}
