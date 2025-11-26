@@ -107,30 +107,18 @@ func _on_leaderboard_player_score_load_fail(error: int, message: String, leaderb
 - `leaderboard_fail` SignalWithArguments<Int,String>
 
 ### Leaderboards - Score Submission
-**Backwards Compatible (Original Signals):**
+**Legacy:**
 - `leaderboard_score_success` SimpleSignal - no leaderboard ID
 - `leaderboard_score_fail` SignalWithArguments<Int,String> - no leaderboard ID
-
-**New Signals (With Leaderboard ID Tracking):**
+**New:**
 - `leaderboard_score_ingame_success` SignalWithArguments<String> - includes leaderboard ID
 - `leaderboard_score_ingame_fail` SignalWithArguments<Int,String,String> - includes leaderboard ID
 
-### Leaderboards - Data Retrieval (NEW)
+### Leaderboards - Data Retrieval
 - `leaderboard_entries_load_success` SignalWithArguments<[GameCenterLeaderboardEntry],Int,String> - entries, total player count, leaderboard ID
 - `leaderboard_entries_load_fail` SignalWithArguments<Int,String,String> - error, message, leaderboard ID
 - `leaderboard_player_score_load_success` SignalWithArguments<GameCenterLeaderboardEntry,String> - player's entry, leaderboard ID
 - `leaderboard_player_score_load_fail` SignalWithArguments<Int,String,String> - error, message, leaderboard ID
-
-## Classes
-
-### GameCenterLeaderboardEntry (NEW)
-Represents a leaderboard entry with the following properties:
-- `player: GameCenterPlayer` - The player who earned this score
-- `score: Int` - The score value
-- `rank: Int` - The player's rank (1 = first place)
-- `context: Int` - Developer-supplied context value
-
-Note: The `date` field is disabled due to iOS bridging issues. Can be re-enabled if needed.
 
 ## Methods
 
@@ -150,41 +138,5 @@ Note: The `date` field is disabled due to iOS bridging issues. Can be re-enabled
 - `submitScore(score: Int, leaderboardIDs: [String], context: Int)` - Submit a score to one or more leaderboards. Emits both old signals (backwards compatible) and new signals (with leaderboard ID).
 - `showLeaderboards()` - Open GameCenter Leaderboards UI.
 - `showLeaderboard(leaderboardID: String)` - Open a specific GameCenter Leaderboard UI.
-- `loadLeaderboardEntries(leaderboardID: String, playerScope: String, timeScope: String, rankMin: Int, rankMax: Int)` - **NEW** - Load leaderboard entries for a range of ranks. 
-  - `playerScope`: "global" or "friendsOnly"
-  - `timeScope`: "allTime", "week", or "today"
-  - `rankMin`/`rankMax`: Range must not exceed 100 entries (Apple limitation)
+- `loadLeaderboardEntries(leaderboardID: String, playerScope: String, timeScope: String, rankMin: Int, rankMax: Int)` - Load leaderboard entries for a range of ranks. 
 - `loadPlayerScore(leaderboardID: String, timeScope: String)` - **NEW** - Load the local player's score and rank regardless of their position on the leaderboard.
-  - `timeScope`: "allTime", "week", or "today"
-
-# Changes in This Fork
-
-## New Features (v1.1.0)
-- **Leaderboard Data Retrieval**: Programmatically fetch player ranks and scores
-- **GameCenterLeaderboardEntry Class**: Data object for leaderboard entries
-- **Async Request Tracking**: All leaderboard callbacks now include leaderboard ID
-
-## Backwards Compatibility
-To maintain compatibility with existing implementations:
-- Original `leaderboard_score_success` and `leaderboard_score_fail` signals remain unchanged
-- New `leaderboard_score_ingame_success` and `leaderboard_score_ingame_fail` signals provide leaderboard ID tracking
-- Both old and new signals are emitted on score submission
-
-Existing code continues to work without modification. New implementations should use the `_ingame_` variants for better async correlation.
-
-## Bug Fixes
-- Fixed player score retrieval to work for any rank (previously only worked for rank #1)
-- Improved error handling with safe optional casting
-- Added input validation for rank ranges
-- Enforced Apple's 100-entry limit for leaderboard queries
-
-# Requirements
-- iOS 17.0+
-- Godot 4.3+
-- SwiftGodot
-
-# Testing
-Tested on:
-- iOS 18.6.2
-- iPhone 16 Pro Max
-- Godot 4.5.1
