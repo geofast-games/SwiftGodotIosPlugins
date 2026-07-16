@@ -1,0 +1,12 @@
+[configuration]
+entry_symbol = "videoencoder"
+compatibility_minimum = 4.2
+reloadable = true
+
+[libraries]
+ios.debug = "res://addons/iosplugins/ios/VideoEncoder.framework"
+ios.release = "res://addons/iosplugins/ios/VideoEncoder.framework"
+
+[dependencies]
+ios.debug = {"res://addons/iosplugins/ios/SwiftGodot.framework" : ""}
+ios.release = {"res://addons/iosplugins/ios/SwiftGodot.framework" : ""}
