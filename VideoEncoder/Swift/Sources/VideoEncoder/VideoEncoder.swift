@@ -302,6 +302,179 @@ class VideoEncoder: Object {
         return encoding
     }
 
+    // MARK: - Audio Mux (replay SFX Phase 2)
+
+    // Design: geofast_bmad/docs/projects/replay-sfx-ios-mux/design.md
+    // iOS mirror of the Android muxAudioTrack: marries the replay mixer's PCM
+    // WAV to an already-encoded MP4 IN PLACE. The video track is passed through
+    // sample-by-sample (never re-encoded, the AVFoundation equivalent of
+    // `-c:v copy`); the WAV is re-encoded to AAC-LC. The file at videoPath is
+    // only replaced once the muxed temp is fully finalized, so ANY failure
+    // leaves the original silent MP4 intact and returns false.
+
+    /// Mux a PCM WAV audio track into the MP4 at videoPath, in place.
+    /// - Parameters:
+    ///   - videoPath: Already-encoded MP4 (video-only) to receive the track
+    ///   - wavPath: 16-bit mono PCM WAV of exactly the video's duration
+    ///   - bitrateKbps: AAC bitrate in kbit/s (from ReplayRenderConfig)
+    /// - Returns: true only if videoPath now carries the audio track
+    @Callable
+    func muxAudioTrack(videoPath: String, wavPath: String, bitrateKbps: Int) -> Bool {
+        if encoding {
+            GD.print("[VideoEncoder] muxAudioTrack called while encoding — rejected")
+            return false
+        }
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: videoPath), fm.fileExists(atPath: wavPath), bitrateKbps > 0 else {
+            GD.print("[VideoEncoder] muxAudioTrack: bad input (video/wav missing or kbps <= 0)")
+            return false
+        }
+
+        let videoURL = URL(fileURLWithPath: videoPath)
+        let tempURL = videoURL.deletingPathExtension()
+            .appendingPathExtension("sfx.tmp.mp4")
+        let bakURL = URL(fileURLWithPath: videoPath + ".bak")
+        try? fm.removeItem(at: tempURL)
+
+        guard writeMuxedFile(videoURL: videoURL, wavURL: URL(fileURLWithPath: wavPath),
+                             outURL: tempURL, bitrateKbps: bitrateKbps) else {
+            try? fm.removeItem(at: tempURL)
+            return false
+        }
+        let muxedSize = (try? fm.attributesOfItem(atPath: tempURL.path)[.size] as? Int) ?? 0
+        guard (muxedSize ?? 0) > 0 else {
+            GD.print("[VideoEncoder] muxAudioTrack: muxed temp file is empty")
+            try? fm.removeItem(at: tempURL)
+            return false
+        }
+
+        // Original-preserving swap: the silent MP4 is recoverable at every step.
+        try? fm.removeItem(at: bakURL)
+        do {
+            try fm.moveItem(at: videoURL, to: bakURL)
+        } catch {
+            GD.print("[VideoEncoder] muxAudioTrack: could not stage original — \(error.localizedDescription)")
+            try? fm.removeItem(at: tempURL)
+            return false
+        }
+        do {
+            try fm.moveItem(at: tempURL, to: videoURL)
+        } catch {
+            try? fm.moveItem(at: bakURL, to: videoURL)  // restore
+            GD.print("[VideoEncoder] muxAudioTrack: swap failed, original restored — \(error.localizedDescription)")
+            try? fm.removeItem(at: tempURL)
+            return false
+        }
+        try? fm.removeItem(at: bakURL)
+        GD.print("[VideoEncoder] muxAudioTrack: audio track muxed into \(videoPath)")
+        return true
+    }
+
+    /// Write outURL = video track (passthrough copy) + AAC-encoded WAV.
+    /// Synchronous: the caller is already on a Godot worker thread.
+    private func writeMuxedFile(videoURL: URL, wavURL: URL, outURL: URL, bitrateKbps: Int) -> Bool {
+        let videoAsset = AVURLAsset(url: videoURL)
+        let audioAsset = AVURLAsset(url: wavURL)
+        guard let videoTrack = videoAsset.tracks(withMediaType: .video).first else {
+            GD.print("[VideoEncoder] muxAudioTrack: no video track in source")
+            return false
+        }
+        guard let audioTrack = audioAsset.tracks(withMediaType: .audio).first else {
+            GD.print("[VideoEncoder] muxAudioTrack: no audio track in WAV")
+            return false
+        }
+
+        do {
+            let reader = try AVAssetReader(asset: videoAsset)
+            let audioReader = try AVAssetReader(asset: audioAsset)
+            let writer = try AVAssetWriter(outputURL: outURL, fileType: .mp4)
+
+            // Video: outputSettings nil on BOTH sides = sample passthrough, no re-encode.
+            let videoOut = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: nil)
+            guard reader.canAdd(videoOut) else { return false }
+            reader.add(videoOut)
+            let videoIn = AVAssetWriterInput(mediaType: .video, outputSettings: nil,
+                                             sourceFormatHint: videoTrack.formatDescriptions.first as! CMFormatDescription?)
+            videoIn.expectsMediaDataInRealTime = false
+            guard writer.canAdd(videoIn) else { return false }
+            writer.add(videoIn)
+
+            // Audio: decode the WAV to LPCM, encode to AAC-LC on the way out.
+            let pcmSettings: [String: Any] = [
+                AVFormatIDKey: kAudioFormatLinearPCM,
+                AVLinearPCMBitDepthKey: 16,
+                AVLinearPCMIsFloatKey: false,
+                AVLinearPCMIsBigEndianKey: false,
+                AVLinearPCMIsNonInterleaved: false,
+            ]
+            let audioOut = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: pcmSettings)
+            guard audioReader.canAdd(audioOut) else { return false }
+            audioReader.add(audioOut)
+
+            let audioDesc = audioTrack.formatDescriptions.first as! CMAudioFormatDescription?
+            let asbd = audioDesc.flatMap { CMAudioFormatDescriptionGetStreamBasicDescription($0)?.pointee }
+            let aacSettings: [String: Any] = [
+                AVFormatIDKey: kAudioFormatMPEG4AAC,
+                AVSampleRateKey: asbd?.mSampleRate ?? 44100,
+                AVNumberOfChannelsKey: Int(asbd?.mChannelsPerFrame ?? 1),
+                AVEncoderBitRateKey: bitrateKbps * 1000,
+            ]
+            let audioIn = AVAssetWriterInput(mediaType: .audio, outputSettings: aacSettings)
+            audioIn.expectsMediaDataInRealTime = false
+            guard writer.canAdd(audioIn) else { return false }
+            writer.add(audioIn)
+
+            guard writer.startWriting(), reader.startReading(), audioReader.startReading() else {
+                GD.print("[VideoEncoder] muxAudioTrack: reader/writer failed to start")
+                return false
+            }
+            writer.startSession(atSourceTime: .zero)
+
+            let queue = DispatchQueue(label: "com.geofast.videoencoder.mux")
+            let group = DispatchGroup()
+            group.enter()
+            videoIn.requestMediaDataWhenReady(on: queue) {
+                while videoIn.isReadyForMoreMediaData {
+                    guard let buf = videoOut.copyNextSampleBuffer() else {
+                        videoIn.markAsFinished(); group.leave(); return
+                    }
+                    videoIn.append(buf)
+                }
+            }
+            group.enter()
+            audioIn.requestMediaDataWhenReady(on: queue) {
+                while audioIn.isReadyForMoreMediaData {
+                    guard let buf = audioOut.copyNextSampleBuffer() else {
+                        audioIn.markAsFinished(); group.leave(); return
+                    }
+                    audioIn.append(buf)
+                }
+            }
+            group.wait()
+
+            guard reader.status != .failed, audioReader.status != .failed else {
+                GD.print("[VideoEncoder] muxAudioTrack: read failed — \(reader.error?.localizedDescription ?? audioReader.error?.localizedDescription ?? "unknown")")
+                writer.cancelWriting()
+                return false
+            }
+
+            let semaphore = DispatchSemaphore(value: 0)
+            var ok = false
+            writer.finishWriting {
+                ok = writer.status == .completed
+                if !ok {
+                    GD.print("[VideoEncoder] muxAudioTrack: write failed — \(writer.error?.localizedDescription ?? "unknown")")
+                }
+                semaphore.signal()
+            }
+            semaphore.wait()
+            return ok
+        } catch {
+            GD.print("[VideoEncoder] muxAudioTrack threw: \(error.localizedDescription)")
+            return false
+        }
+    }
+
     // MARK: - Private Methods
 
     /// Create a CVPixelBuffer from raw RGBA bytes.
